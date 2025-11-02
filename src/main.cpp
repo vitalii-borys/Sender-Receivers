@@ -3,7 +3,9 @@
 // Pins
 int buttonPin = 27;
 const int whiteLedPin = 21;
+const int mainLedPin = 22;
 int whiteLedState = LOW;
+int mainLedState = LOW;
 const int redLedPin = 19;
 int redLedState = LOW;
 const int batteryPin = 34;
@@ -50,11 +52,13 @@ void changeBrightness() {
     default: pwmValue = 0;
   }
   analogWrite(whiteLedPin, pwmValue);
+  analogWrite(mainLedPin, pwmValue);
 }
 
 void resetBrightness() {
   brightnessLevel = 0;
   analogWrite(whiteLedPin, 0);
+  analogWrite(mainLedPin, 0);
 }
 
 void showInfo() {
@@ -68,6 +72,7 @@ void showInfo() {
 
 void setup() {
   pinMode(whiteLedPin, OUTPUT);
+  pinMode(mainLedPin, OUTPUT);
   pinMode(redLedPin, OUTPUT);
   pinMode(buttonPin, INPUT_PULLUP);
   pinMode(batteryPin, INPUT);
