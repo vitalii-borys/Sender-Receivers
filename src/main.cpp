@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "WiFi.h"
+// Master MAC A0:A3:B3:8A:6F:D0
 // Receiver One MAC 5C:01:3B:96:95:C0
 // Pins
 int buttonPin = 27;
