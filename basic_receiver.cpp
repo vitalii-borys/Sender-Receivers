@@ -118,6 +118,7 @@ void handleBlinking() {
 
   if (!blinkingMode) return;
   
+  unsigned long currentMillis = millis();
   unsigned long currentDuration = blinkState ? highDuration : lowDuration;
   
   if (currentMillis - previousBlinkMillis >= currentDuration) {

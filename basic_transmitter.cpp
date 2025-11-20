@@ -7,13 +7,31 @@ int buttonPin = 27;
 const int whiteLedPin = 21;
 const int mainLedPin = 22;
 const int redLedPin = 19;
-const int batteryPin = 34;
 
 //State
 int currentButtonState = HIGH;
 int lastFlickerableState = HIGH;
 int lastSteadyState = HIGH;
 int redLedState = LOW;
+const int batteryPin = 34;
+
+// Timing
+unsigned long previousRedMillis = 0;
+unsigned long previousVoltageMillis = 0;
+unsigned long pressedTime = 0;
+unsigned long releasedTime = 0;
+unsigned long pressDuration = 0;
+int shortPressTime = 500;
+int longPressTime = 1000;
+int turnOffPressTime = 2000;
+unsigned long lastDebounceTime = 0;
+const int deBounceDelay = 50;
+unsigned long lastHeartBreatTimestamp = 0;
+
+// White LED & blinking
+int brightnessLevel = 0;
+bool oneSecondTriggered = false;
+bool twoSecondTriggered = false;
 
 // Red LED blink
 const unsigned long redBlinkCycle = 1000;
@@ -26,23 +44,6 @@ const float voltageMax = 4.16; //4.16 max observed
 const float voltageMin = 3.5; //3.5 cutoff
 
 // Timing
-unsigned long previousRedMillis = 0;
-unsigned long previousVoltageMillis = 0;
-unsigned long pressedTime = 0;
-unsigned long releasedTime = 0;
-unsigned long pressDuration = 0;
-int shortPressTime = 500;
-int longPressTime = 1000; // 1 second for turning on
-int startBlinkingPressTime = 2000; // 2 seconds for turning off
-unsigned long lastDebounceTime = 0;
-const int deBounceDelay = 50;
-
-// White LED
-int brightnessLevel = 0;
-bool oneSecondTriggered = false;
-bool twoSecondTriggered = false;
-
-// Blinking variables
 unsigned long previousBlinkMillis = 0;
 bool blinkState = HIGH;
 unsigned long highDuration = 20;
@@ -50,7 +51,7 @@ unsigned long lowDuration = 40;
 bool blinkingMode = false;
 
 void changeBrightness() {
-  //brightnessLevel = (brightnessLevel + 1) % 11;
+  brightnessLevel = (brightnessLevel + 1) % 11;
   
   // Turn off blinking mode when not in cases 5-10
   if (brightnessLevel < 5 || brightnessLevel > 10) {
@@ -61,16 +62,20 @@ void changeBrightness() {
     blinkingMode = true;
     // Set blink durations based on case
     switch(brightnessLevel) {
-      case 5: highDuration = 20; lowDuration = 40; break;
+      case 5:  highDuration = 20; lowDuration = 40; break;
       case 6: highDuration = 40; lowDuration = 80; break;
       case 7: highDuration = 80; lowDuration = 160; break;
       case 8: highDuration = 160; lowDuration = 320; break;
       case 9: highDuration = 320; lowDuration = 640; break;
       case 10: highDuration = 640; lowDuration = 1280; break;
     }
+    // Reset phase on change so it feels responsive
     blinkState = HIGH;
-    //previousBlinkMillis = millis();
     previousBlinkMillis = millis();
+
+    // Set immediate state
+    analogWrite(whiteLedPin, 255);
+    analogWrite(mainLedPin, 255);
   }
   
   // Regular brightness levels for cases 0-4
@@ -86,6 +91,23 @@ void changeBrightness() {
     }
     analogWrite(whiteLedPin, pwmValue);
     analogWrite(mainLedPin, pwmValue);
+  }
+}
+
+// ESP-NOW
+uint8_t receiverMAC[6] = {0x5C, 0x01, 0x3B, 0x96, 0x95, 0xC0};
+
+struct DataPacket {
+  int brightnessLevel;
+};
+
+void sendData() {
+  struct DataPacket packet;
+  packet.brightnessLevel = brightnessLevel;
+  esp_err_t result = esp_now_send(receiverMAC, (uint8_t *) &packet, sizeof(packet));
+  if (result == ESP_OK) {
+    Serial.print("Brightness: ");
+    Serial.println(brightnessLevel);
   }
 }
 
@@ -123,6 +145,8 @@ void handleBlinking() {
   if (currentMillis - previousBlinkMillis >= currentDuration) {
     previousBlinkMillis = currentMillis;
     // --- CRITICAL FIX: Time-Anchored Logic ---
+    // Instead of setting to currentMillis (which might be late), 
+    // we add the duration. This keeps the "rhythm" perfect.
     //previousBlinkMillis += currentDuration; 
     // -----------------------------------------
     blinkState = !blinkState;
@@ -135,22 +159,6 @@ void handleBlinking() {
       analogWrite(mainLedPin, 0);
     }
   }
-}
-
-struct DataPacket {
-  int brightnessLevel;
-};
-
-void onDataReceive(const uint8_t *mac, const uint8_t *data, int len) {
-  DataPacket packet;
-  if (len != sizeof(packet)) {
-    return;
-  }
-  memcpy(&packet, data, sizeof(packet));
-  brightnessLevel = packet.brightnessLevel;
-  changeBrightness();
-  Serial.print("Brightness: ");
-  Serial.println(packet.brightnessLevel);
 }
 
 void setup() {
@@ -171,12 +179,21 @@ void setup() {
   analogReadResolution(12);
   analogSetAttenuation(ADC_11db);
 
-  esp_now_register_recv_cb(onDataReceive);
-  Serial.println("Receiver ready");
+  //ESP-NOW
+  esp_now_peer_info_t peerInfo;
+  memset(&peerInfo, 0, sizeof(peerInfo));
+  memcpy(peerInfo.peer_addr, receiverMAC, 6);
+  peerInfo.channel = 0;
+  peerInfo.encrypt = false;
+  if(esp_now_add_peer(&peerInfo) != ESP_OK) {
+    Serial.println("Failed to add peer");
+    return;
+  }
+  Serial.println("Peer added successfully!");
 }
 
 void loop() {
-
+  unsigned long currentMillis = millis();
   // Handle blinking if active
   handleBlinking();
   
@@ -192,23 +209,27 @@ void loop() {
       pressedTime = millis();
       oneSecondTriggered = false;
       twoSecondTriggered = false;
+      //Serial.println("The button is pressed.");
     }
     // While button is held down
     if (currentButtonState == LOW) {
       unsigned long holdDuration = millis() - pressedTime;
       // 1-second press detection (turn on to case 5)
       if (holdDuration > longPressTime && !oneSecondTriggered && !twoSecondTriggered) {
-        //Serial.println("1 second press detected - turning on to case 5!");
-        brightnessLevel = 0;
+        // Turn on to case 5 (first blinking pattern)
+        brightnessLevel = -1;
         changeBrightness();
         oneSecondTriggered = true;
+        sendData();
+        //Serial.println("1 second press detected | case 5 | data sent.");
       }
       // 2-second press detection (turn off)
-      if (holdDuration > startBlinkingPressTime && !twoSecondTriggered) {
-        brightnessLevel = 5;
+      if (holdDuration > turnOffPressTime && !twoSecondTriggered) {
+        brightnessLevel = 4;
         changeBrightness();
-        //Serial.println("2 second press detected");
         twoSecondTriggered = true;
+        sendData();
+        //Serial.println("2 second press detected and data sent.");
       }
     } else if (lastSteadyState == LOW && currentButtonState == HIGH) {
       releasedTime = millis();
@@ -216,9 +237,9 @@ void loop() {
       //Serial.println("The button is released.");
       // Short press detection (only if no long press was triggered)
       if (pressDuration < shortPressTime && !oneSecondTriggered && !twoSecondTriggered) {
-        //Serial.println("Short press detected!");
-        brightnessLevel = (brightnessLevel + 1) % 11;
         changeBrightness();
+        sendData();
+        //Serial.println("Short press detected and data sent.");
       }
     }
     lastSteadyState = currentButtonState;
