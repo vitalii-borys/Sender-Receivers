@@ -22,10 +22,11 @@ unsigned long redOnDuration = 1000;
 // Battery
 float batteryVoltage = 3.9;
 const int voltageReadInterval = 1000;
-const float voltageMax = 4.16; //4.16 max observed
-const float voltageMin = 3.5; //3.5 cutoff
+const float voltageMax = 4.3; //4.25 max observed
+const float voltageMin = 3.4; //3.5 cutoff
 
 // Timing
+unsigned long currentMillis = 0;
 unsigned long previousRedMillis = 0;
 unsigned long previousVoltageMillis = 0;
 unsigned long pressedTime = 0;
@@ -70,7 +71,7 @@ void changeBrightness() {
     }
     blinkState = HIGH;
     //previousBlinkMillis = millis();
-    previousBlinkMillis = millis();
+    previousBlinkMillis = millis() - highDuration;
   }
   
   // Regular brightness levels for cases 0-4
@@ -90,7 +91,7 @@ void changeBrightness() {
 }
 
 void handleBlinking() {
-  unsigned long currentMillis = millis();
+  currentMillis = millis();
 
   // Battery read
   if (currentMillis - previousVoltageMillis >= voltageReadInterval) {
@@ -118,7 +119,7 @@ void handleBlinking() {
 
   if (!blinkingMode) return;
   
-  unsigned long currentMillis = millis();
+  //currentMillis = millis();
   unsigned long currentDuration = blinkState ? highDuration : lowDuration;
   
   if (currentMillis - previousBlinkMillis >= currentDuration) {
@@ -167,6 +168,9 @@ void setup() {
     Serial.println("ESP-NOW Init Failed");
     return;
   }
+
+  String mac = WiFi.macAddress();
+  Serial.println("My MAC Address: " + mac);
 
   // Configure ADC
   analogReadResolution(12);
@@ -226,7 +230,10 @@ void loop() {
   }
 }
 // Master MAC A0:A3:B3:8A:6F:D0
-// Receiver One MAC 5C:01:3B:96:95:C0
+// Receiver White MAC 5C:01:3B:96:95:C0
+// Receiver Green MAC A0:B7:65:2C:23:50
+// Receiver Blue MAC A0:B7:65:2D:AA:44
+// Receiver Yellow MAC EC:E3:34:B4:96:84
 //String mac = WiFi.macAddress();
 //Serial.println("My MAC Address: " + mac);
   

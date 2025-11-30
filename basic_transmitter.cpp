@@ -62,7 +62,7 @@ void changeBrightness() {
     blinkingMode = true;
     // Set blink durations based on case
     switch(brightnessLevel) {
-      case 5:  highDuration = 20; lowDuration = 40; break;
+      case 5: highDuration = 20; lowDuration = 40; break;
       case 6: highDuration = 40; lowDuration = 80; break;
       case 7: highDuration = 80; lowDuration = 160; break;
       case 8: highDuration = 160; lowDuration = 320; break;
@@ -95,7 +95,12 @@ void changeBrightness() {
 }
 
 // ESP-NOW
-uint8_t receiverMAC[6] = {0x5C, 0x01, 0x3B, 0x96, 0x95, 0xC0};
+uint8_t receiverMACs[][6] = {
+  {0x5C, 0x01, 0x3B, 0x96, 0x95, 0xC0}, // White
+  {0xA0, 0xB7, 0x65, 0x2C, 0x23, 0x50}, // Green
+  {0xA0, 0xB7, 0x65, 0x2D, 0xAA, 0x44}, // Blue
+  {0xEC, 0xE3, 0x34, 0xB4, 0x96, 0x84} // Yellow
+};
 
 struct DataPacket {
   int brightnessLevel;
@@ -104,10 +109,15 @@ struct DataPacket {
 void sendData() {
   struct DataPacket packet;
   packet.brightnessLevel = brightnessLevel;
-  esp_err_t result = esp_now_send(receiverMAC, (uint8_t *) &packet, sizeof(packet));
-  if (result == ESP_OK) {
-    Serial.print("Brightness: ");
-    Serial.println(brightnessLevel);
+  for (int i = 0; i < sizeof(receiverMACs) / sizeof(receiverMACs[0]); i++) {
+    esp_err_t result = esp_now_send(receiverMACs[i], (uint8_t *) &packet, sizeof(packet));
+    if (result == ESP_OK) {
+      Serial.print("Brightness: ");
+      Serial.println(brightnessLevel);
+    } else {
+      Serial.print("Failed to send to: ");
+      Serial.println(i);
+    }
   }
 }
 
@@ -180,16 +190,20 @@ void setup() {
   analogSetAttenuation(ADC_11db);
 
   //ESP-NOW
-  esp_now_peer_info_t peerInfo;
-  memset(&peerInfo, 0, sizeof(peerInfo));
-  memcpy(peerInfo.peer_addr, receiverMAC, 6);
-  peerInfo.channel = 0;
-  peerInfo.encrypt = false;
-  if(esp_now_add_peer(&peerInfo) != ESP_OK) {
-    Serial.println("Failed to add peer");
-    return;
+  for (int i = 0; i < sizeof(receiverMACs) / sizeof(receiverMACs[0]); i++) {
+    esp_now_peer_info_t peerInfo;
+    memset(&peerInfo, 0, sizeof(peerInfo));
+    memcpy(peerInfo.peer_addr, receiverMACs[i], 6);
+    peerInfo.channel = 0;
+    peerInfo.encrypt = false;
+    if(esp_now_add_peer(&peerInfo) != ESP_OK) {
+      Serial.println("Failed to add peer");
+      return;
+    } else {
+      Serial.print("Peer added successfully: ");
+      Serial.println(i);
+    }
   }
-  Serial.println("Peer added successfully!");
 }
 
 void loop() {
@@ -246,7 +260,6 @@ void loop() {
   }
 }
 // Master MAC A0:A3:B3:8A:6F:D0
-// Receiver One MAC 5C:01:3B:96:95:C0
 //String mac = WiFi.macAddress();
 //Serial.println("My MAC Address: " + mac);
   
