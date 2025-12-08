@@ -62,16 +62,16 @@ void changeBrightness() {
     blinkingMode = true;
     // Set blink durations based on case
     switch(brightnessLevel) {
-      case 5: highDuration = 20; lowDuration = 40; break;
-      case 6: highDuration = 40; lowDuration = 80; break;
-      case 7: highDuration = 80; lowDuration = 160; break;
-      case 8: highDuration = 160; lowDuration = 320; break;
-      case 9: highDuration = 320; lowDuration = 640; break;
-      case 10: highDuration = 640; lowDuration = 1280; break;
+      case 5: highDuration = 20; lowDuration = 80; break;
+      case 6: highDuration = 40; lowDuration = 160; break;
+      case 7: highDuration = 80; lowDuration = 320; break;
+      case 8: highDuration = 160; lowDuration = 640; break;
+      case 9: highDuration = 320; lowDuration = 1280; break;
+      case 10: highDuration = 640; lowDuration = 2560; break;
     }
     blinkState = HIGH;
-    //previousBlinkMillis = millis();
-    previousBlinkMillis = millis() - highDuration;
+    previousBlinkMillis = millis();
+    //previousBlinkMillis = millis() - highDuration;
   }
   
   // Regular brightness levels for cases 0-4
@@ -123,9 +123,9 @@ void handleBlinking() {
   unsigned long currentDuration = blinkState ? highDuration : lowDuration;
   
   if (currentMillis - previousBlinkMillis >= currentDuration) {
-    previousBlinkMillis = currentMillis;
+    /* previousBlinkMillis = currentMillis; */
     // --- CRITICAL FIX: Time-Anchored Logic ---
-    //previousBlinkMillis += currentDuration; 
+    previousBlinkMillis += currentDuration; 
     // -----------------------------------------
     blinkState = !blinkState;
     

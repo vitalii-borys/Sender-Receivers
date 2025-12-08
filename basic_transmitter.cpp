@@ -27,6 +27,7 @@ int turnOffPressTime = 2000;
 unsigned long lastDebounceTime = 0;
 const int deBounceDelay = 50;
 unsigned long lastHeartBreatTimestamp = 0;
+unsigned long currentMillis = 0;
 
 // White LED & blinking
 int brightnessLevel = 0;
@@ -46,12 +47,15 @@ const float voltageMin = 3.5; //3.5 cutoff
 // Timing
 unsigned long previousBlinkMillis = 0;
 bool blinkState = HIGH;
-unsigned long highDuration = 20;
-unsigned long lowDuration = 40;
+unsigned long highDuration = 0;
+unsigned long lowDuration = 0;
+unsigned long timeToSendNext = 0;
+int nextReceiverIndex = 0;
+bool sendingMode = false;
 bool blinkingMode = false;
 
 void changeBrightness() {
-  brightnessLevel = (brightnessLevel + 1) % 11;
+  //brightnessLevel = (brightnessLevel + 1) % 11;
   
   // Turn off blinking mode when not in cases 5-10
   if (brightnessLevel < 5 || brightnessLevel > 10) {
@@ -62,12 +66,12 @@ void changeBrightness() {
     blinkingMode = true;
     // Set blink durations based on case
     switch(brightnessLevel) {
-      case 5: highDuration = 20; lowDuration = 40; break;
-      case 6: highDuration = 40; lowDuration = 80; break;
-      case 7: highDuration = 80; lowDuration = 160; break;
-      case 8: highDuration = 160; lowDuration = 320; break;
-      case 9: highDuration = 320; lowDuration = 640; break;
-      case 10: highDuration = 640; lowDuration = 1280; break;
+      case 5: highDuration = 20; lowDuration = 80; break;
+      case 6: highDuration = 40; lowDuration = 160; break;
+      case 7: highDuration = 80; lowDuration = 320; break;
+      case 8: highDuration = 160; lowDuration = 640; break;
+      case 9: highDuration = 320; lowDuration = 1280; break;
+      case 10: highDuration = 640; lowDuration = 2560; break;
     }
     // Reset phase on change so it feels responsive
     blinkState = HIGH;
@@ -91,6 +95,9 @@ void changeBrightness() {
     }
     analogWrite(whiteLedPin, pwmValue);
     analogWrite(mainLedPin, pwmValue);
+    
+    //highDuration = 0;
+    //lowDuration = 0;
   }
 }
 
@@ -107,22 +114,12 @@ struct DataPacket {
 };
 
 void sendData() {
-  struct DataPacket packet;
-  packet.brightnessLevel = brightnessLevel;
-  for (int i = 0; i < sizeof(receiverMACs) / sizeof(receiverMACs[0]); i++) {
-    esp_err_t result = esp_now_send(receiverMACs[i], (uint8_t *) &packet, sizeof(packet));
-    if (result == ESP_OK) {
-      Serial.print("Brightness: ");
-      Serial.println(brightnessLevel);
-    } else {
-      Serial.print("Failed to send to: ");
-      Serial.println(i);
-    }
-  }
+  sendingMode = true;
+  timeToSendNext = millis() + highDuration;
 }
 
 void handleBlinking() {
-  unsigned long currentMillis = millis();
+  currentMillis = millis();
 
   // Battery read
   if (currentMillis - previousVoltageMillis >= voltageReadInterval) {
@@ -154,13 +151,7 @@ void handleBlinking() {
   
   if (currentMillis - previousBlinkMillis >= currentDuration) {
     previousBlinkMillis = currentMillis;
-    // --- CRITICAL FIX: Time-Anchored Logic ---
-    // Instead of setting to currentMillis (which might be late), 
-    // we add the duration. This keeps the "rhythm" perfect.
-    //previousBlinkMillis += currentDuration; 
-    // -----------------------------------------
     blinkState = !blinkState;
-    
     if (blinkState) {
       analogWrite(whiteLedPin, 255);
       analogWrite(mainLedPin, 255);
@@ -207,9 +198,31 @@ void setup() {
 }
 
 void loop() {
-  unsigned long currentMillis = millis();
   // Handle blinking if active
   handleBlinking();
+
+  // Send with interval
+  if (currentMillis >= timeToSendNext && sendingMode) {
+    struct DataPacket packet;
+    packet.brightnessLevel = brightnessLevel;
+    esp_err_t result = esp_now_send(receiverMACs[nextReceiverIndex], (uint8_t *) &packet, sizeof(packet));
+    if (result == ESP_OK) {
+      Serial.print(" Brightness: ");
+      Serial.print(brightnessLevel);
+    }
+    if (nextReceiverIndex < (sizeof(receiverMACs) / sizeof(receiverMACs[0])) - 1) {
+      if (brightnessLevel == 0) {
+        timeToSendNext = millis() + 1;
+      } else {
+        timeToSendNext = timeToSendNext + highDuration;
+      }
+      nextReceiverIndex++;
+    } else {
+      nextReceiverIndex = 0;
+      sendingMode = false;
+      Serial.println(" ");
+    }
+  }
   
   // Button behavior with debouncing
   currentButtonState = digitalRead(buttonPin);
@@ -231,18 +244,22 @@ void loop() {
       // 1-second press detection (turn on to case 5)
       if (holdDuration > longPressTime && !oneSecondTriggered && !twoSecondTriggered) {
         // Turn on to case 5 (first blinking pattern)
-        brightnessLevel = -1;
+        brightnessLevel = 0;
         changeBrightness();
         oneSecondTriggered = true;
-        sendData();
+        sendingMode = true;
+        timeToSendNext = millis() + highDuration;
         //Serial.println("1 second press detected | case 5 | data sent.");
       }
       // 2-second press detection (turn off)
       if (holdDuration > turnOffPressTime && !twoSecondTriggered) {
-        brightnessLevel = 4;
+        if (brightnessLevel < 5) {
+          brightnessLevel = 5;
+        }
         changeBrightness();
         twoSecondTriggered = true;
-        sendData();
+        sendingMode = true;
+        timeToSendNext = millis() + highDuration;
         //Serial.println("2 second press detected and data sent.");
       }
     } else if (lastSteadyState == LOW && currentButtonState == HIGH) {
@@ -251,8 +268,10 @@ void loop() {
       //Serial.println("The button is released.");
       // Short press detection (only if no long press was triggered)
       if (pressDuration < shortPressTime && !oneSecondTriggered && !twoSecondTriggered) {
+        brightnessLevel = (brightnessLevel + 1) % 11;
         changeBrightness();
-        sendData();
+        sendingMode = true;
+        timeToSendNext = millis() + highDuration;
         //Serial.println("Short press detected and data sent.");
       }
     }
