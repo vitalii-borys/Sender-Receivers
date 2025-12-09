@@ -51,8 +51,7 @@ unsigned long lowDuration = 40;
 bool blinkingMode = false;
 
 void changeBrightness() {
-  //brightnessLevel = (brightnessLevel + 1) % 11;
-  
+  previousBlinkMillis = millis();
   // Turn off blinking mode when not in cases 5-10
   if (brightnessLevel < 5 || brightnessLevel > 10) {
     blinkingMode = false;
@@ -70,8 +69,6 @@ void changeBrightness() {
       case 10: highDuration = 640; lowDuration = 2560; break;
     }
     blinkState = HIGH;
-    previousBlinkMillis = millis();
-    //previousBlinkMillis = millis() - highDuration;
   }
   
   // Regular brightness levels for cases 0-4
@@ -119,13 +116,12 @@ void handleBlinking() {
 
   if (!blinkingMode) return;
   
-  //currentMillis = millis();
   unsigned long currentDuration = blinkState ? highDuration : lowDuration;
   
   if (currentMillis - previousBlinkMillis >= currentDuration) {
-    /* previousBlinkMillis = currentMillis; */
+    previousBlinkMillis = currentMillis;
     // --- CRITICAL FIX: Time-Anchored Logic ---
-    previousBlinkMillis += currentDuration; 
+    //previousBlinkMillis += currentDuration;
     // -----------------------------------------
     blinkState = !blinkState;
     

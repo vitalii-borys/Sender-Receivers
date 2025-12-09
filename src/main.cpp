@@ -7,13 +7,32 @@ int buttonPin = 27;
 const int whiteLedPin = 21;
 const int mainLedPin = 22;
 const int redLedPin = 19;
-const int batteryPin = 34;
 
 //State
 int currentButtonState = HIGH;
 int lastFlickerableState = HIGH;
 int lastSteadyState = HIGH;
 int redLedState = LOW;
+const int batteryPin = 34;
+
+// Timing
+unsigned long previousRedMillis = 0;
+unsigned long previousVoltageMillis = 0;
+unsigned long pressedTime = 0;
+unsigned long releasedTime = 0;
+unsigned long pressDuration = 0;
+int shortPressTime = 500;
+int longPressTime = 1000;
+int turnOffPressTime = 2000;
+unsigned long lastDebounceTime = 0;
+const int deBounceDelay = 50;
+unsigned long lastHeartBreatTimestamp = 0;
+unsigned long currentMillis = 0;
+
+// White LED & blinking
+int brightnessLevel = 0;
+bool oneSecondTriggered = false;
+bool twoSecondTriggered = false;
 
 // Red LED blink
 const unsigned long redBlinkCycle = 1000;
@@ -22,37 +41,21 @@ unsigned long redOnDuration = 1000;
 // Battery
 float batteryVoltage = 3.9;
 const int voltageReadInterval = 1000;
-const float voltageMax = 4.3; //4.25 max observed
-const float voltageMin = 3.4; //3.5 cutoff
+const float voltageMax = 4.16; //4.16 max observed
+const float voltageMin = 3.5; //3.5 cutoff
 
 // Timing
-unsigned long currentMillis = 0;
-unsigned long previousRedMillis = 0;
-unsigned long previousVoltageMillis = 0;
-unsigned long pressedTime = 0;
-unsigned long releasedTime = 0;
-unsigned long pressDuration = 0;
-int shortPressTime = 500;
-int longPressTime = 1000; // 1 second for turning on
-int startBlinkingPressTime = 2000; // 2 seconds for turning off
-unsigned long lastDebounceTime = 0;
-const int deBounceDelay = 50;
-
-// White LED
-int brightnessLevel = 0;
-bool oneSecondTriggered = false;
-bool twoSecondTriggered = false;
-
-// Blinking variables
 unsigned long previousBlinkMillis = 0;
 bool blinkState = HIGH;
-unsigned long highDuration = 20;
-unsigned long lowDuration = 40;
+unsigned long highDuration = 0;
+unsigned long lowDuration = 0;
+unsigned long timeToSendNext = 0;
+int nextReceiverIndex = 0;
+bool sendingMode = false;
 bool blinkingMode = false;
 
-void changeBrightness() {
-  //brightnessLevel = (brightnessLevel + 1) % 11;
-  
+void changeBrightness() { 
+    previousBlinkMillis = millis();
   // Turn off blinking mode when not in cases 5-10
   if (brightnessLevel < 5 || brightnessLevel > 10) {
     blinkingMode = false;
@@ -69,9 +72,12 @@ void changeBrightness() {
       case 9: highDuration = 320; lowDuration = 1280; break;
       case 10: highDuration = 640; lowDuration = 2560; break;
     }
+    // Reset phase on change so it feels responsive
     blinkState = HIGH;
-    previousBlinkMillis = millis();
-    //previousBlinkMillis = millis() - highDuration;
+
+    // Set immediate state
+    analogWrite(whiteLedPin, 255);
+    analogWrite(mainLedPin, 255);
   }
   
   // Regular brightness levels for cases 0-4
@@ -89,6 +95,18 @@ void changeBrightness() {
     analogWrite(mainLedPin, pwmValue);
   }
 }
+
+// ESP-NOW
+uint8_t receiverMACs[][6] = {
+  {0x5C, 0x01, 0x3B, 0x96, 0x95, 0xC0}, // White
+  {0xA0, 0xB7, 0x65, 0x2C, 0x23, 0x50}, // Green
+  {0xA0, 0xB7, 0x65, 0x2D, 0xAA, 0x44}, // Blue
+  {0xEC, 0xE3, 0x34, 0xB4, 0x96, 0x84} // Yellow
+};
+
+struct DataPacket {
+  int brightnessLevel;
+};
 
 void handleBlinking() {
   currentMillis = millis();
@@ -119,16 +137,11 @@ void handleBlinking() {
 
   if (!blinkingMode) return;
   
-  //currentMillis = millis();
   unsigned long currentDuration = blinkState ? highDuration : lowDuration;
   
   if (currentMillis - previousBlinkMillis >= currentDuration) {
-    /* previousBlinkMillis = currentMillis; */
-    // --- CRITICAL FIX: Time-Anchored Logic ---
-    previousBlinkMillis += currentDuration; 
-    // -----------------------------------------
+    previousBlinkMillis = currentMillis;
     blinkState = !blinkState;
-    
     if (blinkState) {
       analogWrite(whiteLedPin, 255);
       analogWrite(mainLedPin, 255);
@@ -137,22 +150,6 @@ void handleBlinking() {
       analogWrite(mainLedPin, 0);
     }
   }
-}
-
-struct DataPacket {
-  int brightnessLevel;
-};
-
-void onDataReceive(const uint8_t *mac, const uint8_t *data, int len) {
-  DataPacket packet;
-  if (len != sizeof(packet)) {
-    return;
-  }
-  memcpy(&packet, data, sizeof(packet));
-  brightnessLevel = packet.brightnessLevel;
-  changeBrightness();
-  Serial.print("Brightness: ");
-  Serial.println(packet.brightnessLevel);
 }
 
 void setup() {
@@ -169,21 +166,53 @@ void setup() {
     return;
   }
 
-  String mac = WiFi.macAddress();
-  Serial.println("My MAC Address: " + mac);
-
   // Configure ADC
   analogReadResolution(12);
   analogSetAttenuation(ADC_11db);
 
-  esp_now_register_recv_cb(onDataReceive);
-  Serial.println("Receiver ready");
+  //ESP-NOW
+  for (int i = 0; i < sizeof(receiverMACs) / sizeof(receiverMACs[0]); i++) {
+    esp_now_peer_info_t peerInfo;
+    memset(&peerInfo, 0, sizeof(peerInfo));
+    memcpy(peerInfo.peer_addr, receiverMACs[i], 6);
+    peerInfo.channel = 0;
+    peerInfo.encrypt = false;
+    if(esp_now_add_peer(&peerInfo) != ESP_OK) {
+      Serial.println("Failed to add peer");
+      return;
+    } else {
+      Serial.print("Peer added successfully: ");
+      Serial.println(i);
+    }
+  }
 }
 
 void loop() {
-
   // Handle blinking if active
   handleBlinking();
+
+  // Send with interval
+  if (currentMillis >= timeToSendNext && sendingMode) {
+    struct DataPacket packet;
+    packet.brightnessLevel = brightnessLevel;
+    esp_err_t result = esp_now_send(receiverMACs[nextReceiverIndex], (uint8_t *) &packet, sizeof(packet));
+    if (result == ESP_OK) {
+      Serial.print(" Brightness: ");
+      Serial.print(brightnessLevel);
+    }
+    if (nextReceiverIndex < (sizeof(receiverMACs) / sizeof(receiverMACs[0])) - 1) {
+      if (brightnessLevel == 0) {
+        timeToSendNext = millis() + 1;
+      } else {
+        timeToSendNext = timeToSendNext + highDuration;
+      }
+      nextReceiverIndex++;
+    } else {
+      nextReceiverIndex = 0;
+      sendingMode = false;
+      Serial.println(" ");
+    }
+  }
   
   // Button behavior with debouncing
   currentButtonState = digitalRead(buttonPin);
@@ -197,23 +226,31 @@ void loop() {
       pressedTime = millis();
       oneSecondTriggered = false;
       twoSecondTriggered = false;
+      //Serial.println("The button is pressed.");
     }
     // While button is held down
     if (currentButtonState == LOW) {
       unsigned long holdDuration = millis() - pressedTime;
       // 1-second press detection (turn on to case 5)
       if (holdDuration > longPressTime && !oneSecondTriggered && !twoSecondTriggered) {
-        //Serial.println("1 second press detected - turning on to case 5!");
+        // Turn on to case 5 (first blinking pattern)
         brightnessLevel = 0;
         changeBrightness();
         oneSecondTriggered = true;
+        sendingMode = true;
+        timeToSendNext = millis() + highDuration;
+        //Serial.println("1 second press detected | case 5 | data sent.");
       }
       // 2-second press detection (turn off)
-      if (holdDuration > startBlinkingPressTime && !twoSecondTriggered) {
-        brightnessLevel = 5;
+      if (holdDuration > turnOffPressTime && !twoSecondTriggered) {
+        if (brightnessLevel < 5) {
+          brightnessLevel = 5;
+        }
         changeBrightness();
-        //Serial.println("2 second press detected");
         twoSecondTriggered = true;
+        sendingMode = true;
+        timeToSendNext = millis() + highDuration;
+        //Serial.println("2 second press detected and data sent.");
       }
     } else if (lastSteadyState == LOW && currentButtonState == HIGH) {
       releasedTime = millis();
@@ -221,19 +258,17 @@ void loop() {
       //Serial.println("The button is released.");
       // Short press detection (only if no long press was triggered)
       if (pressDuration < shortPressTime && !oneSecondTriggered && !twoSecondTriggered) {
-        //Serial.println("Short press detected!");
         brightnessLevel = (brightnessLevel + 1) % 11;
         changeBrightness();
+        sendingMode = true;
+        timeToSendNext = millis() + highDuration;
+        //Serial.println("Short press detected and data sent.");
       }
     }
     lastSteadyState = currentButtonState;
   }
 }
 // Master MAC A0:A3:B3:8A:6F:D0
-// Receiver White MAC 5C:01:3B:96:95:C0
-// Receiver Green MAC A0:B7:65:2C:23:50
-// Receiver Blue MAC A0:B7:65:2D:AA:44
-// Receiver Yellow MAC EC:E3:34:B4:96:84
 //String mac = WiFi.macAddress();
 //Serial.println("My MAC Address: " + mac);
   

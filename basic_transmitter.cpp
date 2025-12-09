@@ -54,9 +54,8 @@ int nextReceiverIndex = 0;
 bool sendingMode = false;
 bool blinkingMode = false;
 
-void changeBrightness() {
-  //brightnessLevel = (brightnessLevel + 1) % 11;
-  
+void changeBrightness() { 
+    previousBlinkMillis = millis();
   // Turn off blinking mode when not in cases 5-10
   if (brightnessLevel < 5 || brightnessLevel > 10) {
     blinkingMode = false;
@@ -75,7 +74,6 @@ void changeBrightness() {
     }
     // Reset phase on change so it feels responsive
     blinkState = HIGH;
-    previousBlinkMillis = millis();
 
     // Set immediate state
     analogWrite(whiteLedPin, 255);
@@ -95,9 +93,6 @@ void changeBrightness() {
     }
     analogWrite(whiteLedPin, pwmValue);
     analogWrite(mainLedPin, pwmValue);
-    
-    //highDuration = 0;
-    //lowDuration = 0;
   }
 }
 
@@ -112,11 +107,6 @@ uint8_t receiverMACs[][6] = {
 struct DataPacket {
   int brightnessLevel;
 };
-
-void sendData() {
-  sendingMode = true;
-  timeToSendNext = millis() + highDuration;
-}
 
 void handleBlinking() {
   currentMillis = millis();
